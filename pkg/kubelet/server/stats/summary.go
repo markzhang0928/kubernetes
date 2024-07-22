@@ -69,38 +69,45 @@ func NewSummaryProvider(statsProvider Provider) SummaryProvider {
 func (sp *summaryProviderImpl) Get(ctx context.Context, updateStats bool) (*statsapi.Summary, error) {
 	// TODO(timstclair): Consider returning a best-effort response if any of
 	// the following errors occur.
+	// 从client-go informer的本地缓存中获取node对象
 	node, err := sp.provider.GetNode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node info: %v", err)
 	}
+	// 从container_manager中获取NodeConfig结构体
 	nodeConfig := sp.provider.GetNodeConfig()
+	// 从cadvisor中获取根目录“/”下的cgroup的统计信息
 	rootStats, networkStats, err := sp.provider.GetCgroupStats("/", updateStats)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root cgroup stats: %v", err)
 	}
+	// 从cadvisor中获取root文件系统的统计信息
 	rootFsStats, err := sp.provider.RootFsStats()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rootFs stats: %v", err)
 	}
+	// 获取image文件系统的统计信息
 	imageFsStats, containerFsStats, err := sp.provider.ImageFsStats(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get imageFs stats: %v", err)
 	}
 	var podStats []statsapi.PodStats
 	if updateStats {
+		// 更新所有容器的cpu usage信息并获取所有pod的启动时间、容器状态、cpu使用量、内存使用量等统计信息
 		podStats, err = sp.provider.ListPodStatsAndUpdateCPUNanoCoreUsage(ctx)
 	} else {
+		// 获取所有pod的启动时间、容器状态、cpu使用量、内存使用量等统计信息
 		podStats, err = sp.provider.ListPodStats(ctx)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pod stats: %v", err)
 	}
-
+	// 获取pid限制信息
 	rlimit, err := sp.provider.RlimitStats()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rlimit stats: %v", err)
 	}
-
+	// 组装以上的统计信息并返回
 	nodeStats := statsapi.NodeStats{
 		NodeName:         node.Name,
 		CPU:              rootStats.CPU,

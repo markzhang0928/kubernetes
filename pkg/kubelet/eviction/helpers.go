@@ -684,6 +684,7 @@ func priority(p1, p2 *v1.Pod) int {
 }
 
 // exceedMemoryRequests compares whether or not pods' memory usage exceeds their requests
+// 当内存资源不足时，kubelet 在驱逐 Pod 时只会考虑 requests 和 Pod 的内存使用量，不会考虑 limits。
 func exceedMemoryRequests(stats statsFunc) cmpFunc {
 	return func(p1, p2 *v1.Pod) int {
 		p1Stats, p1Found := stats(p1)
@@ -808,10 +809,16 @@ func cmpBool(a, b bool) int {
 	return 1
 }
 
+// rankMemoryPressure 、rankPIDPressure、 rankDiskPressureFunc 分别对应内存、PID、硬盘，
+// 当对应资源发生饥饿时就会使用对应排序函数选择 Pod Kill。
+
 // rankMemoryPressure orders the input pods for eviction in response to memory pressure.
 // It ranks by whether or not the pod's usage exceeds its requests, then by priority, and
 // finally by memory usage above requests.
 func rankMemoryPressure(pods []*v1.Pod, stats statsFunc) {
+	// Pod 的内存使用量是否超过了 request 指定的值 > pod优先级,优先级低的 Pod 最先被驱逐 > pod内存request值减去pod的内存使用量的值
+	// 可以确保 QoS 等级为 Guaranteed 的 Pod 不会在 QoS 等级为 Best Effort 的 Pod 之前被驱逐，
+	// 但不能保证它不会在 QoS 等级为 Burstable 的 Pod 之前被驱逐。
 	orderedBy(exceedMemoryRequests(stats), priority, memory(stats)).Sort(pods)
 }
 
@@ -828,6 +835,7 @@ func rankDiskPressureFunc(fsStatsToMeasure []fsStatsType, diskResource v1.Resour
 }
 
 // byEvictionPriority implements sort.Interface for []v1.ResourceName.
+// 该排序方法将内存排在所有其他资源信号之前，并将没有资源可回收的阈值排在最后
 type byEvictionPriority []evictionapi.Threshold
 
 func (a byEvictionPriority) Len() int      { return len(a) }
@@ -1197,6 +1205,7 @@ func PodIsEvicted(podStatus v1.PodStatus) bool {
 	return podStatus.Phase == v1.PodFailed && podStatus.Reason == Reason
 }
 
+// 如果回收的资源足够，则不用走驱逐逻辑。
 // buildSignalToNodeReclaimFuncs returns reclaim functions associated with resources.
 func buildSignalToNodeReclaimFuncs(imageGC ImageGC, containerGC ContainerGC, withImageFs bool, splitContainerImageFs bool) map[evictionapi.Signal]nodeReclaimFuncs {
 	signalToReclaimFunc := map[evictionapi.Signal]nodeReclaimFuncs{}

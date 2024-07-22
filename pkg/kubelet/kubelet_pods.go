@@ -101,6 +101,8 @@ func (kl *Kubelet) listPodsFromDisk() ([]types.UID, error) {
 // deleted but may still be terminating, which means resources assigned to
 // those pods during admission may still be in use. See
 // https://github.com/kubernetes/kubernetes/issues/104824
+// 用于获取能被驱逐的pod列表，过滤掉以下情形的pod之后，返回的pod列表就是能被驱逐的pod。
+// failed/ succeeded/
 func (kl *Kubelet) GetActivePods() []*v1.Pod {
 	allPods := kl.podManager.GetPods()
 	activePods := kl.filterOutInactivePods(allPods)

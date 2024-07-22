@@ -102,6 +102,7 @@ func (m *memoryThresholdNotifier) UpdateThreshold(summary *statsapi.Summary) err
 	if m.notifier != nil {
 		m.notifier.Stop()
 	}
+	// 工厂模式
 	newNotifier, err := m.factory.NewCgroupNotifier(m.cgroupPath, memoryUsageAttribute, memcgThreshold.Value())
 	if err != nil {
 		return err

@@ -979,31 +979,20 @@ type Kubelet struct {
 	// https://github.com/kubernetes/kubernetes/issues/116970
 	podManager kubepod.Manager
 
-	// podWorkers is responsible for driving the lifecycle state machine of each pod. The worker is
-	// notified of config changes, updates, periodic reconciliation, container runtime updates, and
-	// evictions of all desired pods and will invoke reconciliation methods per pod in separate
-	// goroutines. The podWorkers are authoritative in the kubelet for what pods are actually being
-	// run and their current state:
+	// "podWorkers负责驱动每个pod的生命周期状态机。工作器会被通知配置变更、更新、周期性的协调、容器运行时更新和所有期望的pods的驱逐，
+	// 并将为每个pod在单独的goroutines中调用协调方法。在kubelet中，podWorkers对于实际运行的pods及其当前状态有权威性：
 	//
-	// * syncing: pod should be running (syncPod)
-	// * terminating: pod should be stopped (syncTerminatingPod)
-	// * terminated: pod should have all resources cleaned up (syncTerminatedPod)
+	//* syncing：pod应该正在运行（syncPod）
+	//* terminating：pod应该停止运行（syncTerminatingPod）
+	//* terminated：pod应该清理所有资源（syncTerminatedPod）
 	//
-	// and invoke the handler methods that correspond to each state. Components within the
-	// kubelet that need to know the phase of the pod in order to correctly set up or tear down
-	// resources must consult the podWorkers.
+	// 并调用与每个状态相对应的处理器方法。在kubelet内部需要知道pod阶段以正确设置或卸载资源的组件必须咨询podWorkers。
 	//
-	// Once a pod has been accepted by the pod workers, no other pod with that same UID (and
-	// name+namespace, for static pods) will be started until the first pod has fully terminated
-	// and been cleaned up by SyncKnownPods. This means a pod may be desired (in API), admitted
-	// (in pod manager), and requested (by invoking UpdatePod) but not start for an arbitrarily
-	// long interval because a prior pod is still terminating.
+	// 一旦pod被podWorkers接受，没有其他具有相同UID（和名称+命名空间，对于静态pods）的pod会启动，直到第一个pod已经完全终止并由SyncKnownPods清理。
+	// 这意味着一个pod可能是期望的（在API中），被接纳的（在pod manager中），和被请求的（通过调用UpdatePod），但由于之前的pod仍在终止，所以可能长时间不启动。
 	//
-	// As an event-driven (by UpdatePod) controller, the podWorkers must periodically be resynced
-	// by the kubelet invoking SyncKnownPods with the desired state (admitted pods in podManager).
-	// Since the podManager may be unaware of some running pods due to force deletion, the
-	// podWorkers are responsible for triggering a sync of pods that are no longer desired but
-	// must still run to completion.
+	// 作为一个事件驱动（通过UpdatePod）的控制器，podWorkers必须通过kubelet调用SyncKnownPods与期望状态（podManager中的已接纳pods）进行周期性的重新同步。
+	// 由于podManager可能由于强制删除而不知道一些正在运行的pods，podWorkers负责触发不再期望但必须运行到完成的pods的同步。"
 	podWorkers PodWorkers
 
 	// evictionManager observes the state of the node for situations that could impact node stability

@@ -35,6 +35,7 @@ const (
 	numFdEvents = 6
 )
 
+// 事件通知对象，实现了 Linux 内核级别的事件通知，获取 CGroup 相应的事件
 type linuxCgroupNotifier struct {
 	eventfd  int
 	epfd     int
@@ -117,6 +118,7 @@ func (n *linuxCgroupNotifier) Start(eventCh chan<- struct{}) {
 		return
 	}
 	buf := make([]byte, eventSize)
+	// 监听内核事件，当内核事件发生时，将事件写入eventfd
 	for {
 		select {
 		case <-n.stop:

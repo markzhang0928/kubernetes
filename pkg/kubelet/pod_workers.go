@@ -732,6 +732,13 @@ func isPodStatusCacheTerminal(status *kubecontainer.PodStatus) bool {
 // UpdatePod carries a configuration change or termination state to a pod. A pod is either runnable,
 // terminating, or terminated, and will transition to terminating if: deleted on the apiserver,
 // discovered to have a terminal phase (Succeeded or Failed), or evicted by the kubelet.
+// podWorkers.UpdatePod()
+//
+//	--> p.managePodLoop()
+//	  --> kl.syncPod()
+//	  --> kl.killPod()
+//	  --> kl.containerRuntime.KillPod()
+//	  --> kl.containerRuntime.killContainersWithSyncResult()/kl.containerRuntime.runtimeService.StopPodSandbox()
 func (p *podWorkers) UpdatePod(options UpdatePodOptions) {
 	// Handle when the pod is an orphan (no config) and we only have runtime status by running only
 	// the terminating part of the lifecycle. A running pod contains only a minimal set of information
@@ -1644,6 +1651,7 @@ func (p *podWorkers) removeTerminatedWorker(uid types.UID, status *podSyncStatus
 
 // killPodNow returns a KillPodFunc that can be used to kill a pod.
 // It is intended to be injected into other modules that need to kill a pod.
+// 获取gracePeriod，拼凑UpdatePodOptions，并调用podWorkers.UpdatePod来kill Pod(只停未删)
 func killPodNow(podWorkers PodWorkers, recorder record.EventRecorder) eviction.KillPodFunc {
 	return func(pod *v1.Pod, isEvicted bool, gracePeriodOverride *int64, statusFn func(*v1.PodStatus)) error {
 		// determine the grace period to use when killing the pod
