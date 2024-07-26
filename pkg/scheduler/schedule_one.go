@@ -66,6 +66,7 @@ const (
 // scheduleOne does the entire scheduling workflow for a single pod. It is serialized on the scheduling algorithm's host fitting.
 func (sched *Scheduler) scheduleOne(ctx context.Context) {
 	logger := klog.FromContext(ctx)
+	// 1. 从scheduler的待调度pod队列中取出一个pod
 	podInfo, err := sched.NextPod(logger)
 	if err != nil {
 		logger.Error(err, "Error while retrieving next pod from scheduling queue")
@@ -91,6 +92,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 		logger.Error(err, "Error occurred")
 		return
 	}
+	// 跳过指定状态下的Pod，不进行调度
 	if sched.skipPodSchedule(ctx, fwk, pod) {
 		return
 	}
@@ -99,6 +101,9 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 
 	// Synchronously attempt to find a fit for the pod.
 	start := time.Now()
+	// CycleState代表当前调度的上下文，每个调度周期开始时都会创建一个空的 CycleState 对象，用于存储当前调度周期所需的任意状态。
+	// 每个调度周期都有一个共享的 CycleState 对象，插件通常使用它来存储其内部状态并作为多个调度阶段之间的通信通道。
+	// CycleState 对象必须实现深度复制功能，这对于使抢占高效且准确是必要的。
 	state := framework.NewCycleState()
 	state.SetRecordPluginMetrics(rand.Intn(100) < pluginMetricsSamplePercent)
 
@@ -116,6 +121,8 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 	}
 
 	// bind the pod to its host asynchronously (we can do this b/c of the assumption step above).
+	// 调度器决定将 pod 调度到某个节点后,会发起异步的 pod 绑定操作。
+	// 这样做是为了不阻塞主调度循环,提高调度吞吐量。
 	go func() {
 		bindingCycleCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -123,8 +130,10 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 		metrics.Goroutines.WithLabelValues(metrics.Binding).Inc()
 		defer metrics.Goroutines.WithLabelValues(metrics.Binding).Dec()
 
+		// 一旦 pod 进入绑定周期,调度器就会假设 pod 已被调度。
 		status := sched.bindingCycle(bindingCycleCtx, state, fwk, scheduleResult, assumedPodInfo, start, podsToActivate)
 		if !status.IsSuccess() {
+			// 如果 pod 绑定最终失败,会调用 Unreserve 钩子,让各插件恢复自定义状态。
 			sched.handleBindingCycleError(bindingCycleCtx, state, fwk, assumedPodInfo, start, scheduleResult, status)
 			return
 		}
@@ -160,17 +169,15 @@ func (sched *Scheduler) schedulingCycle(
 			return ScheduleResult{nominatingInfo: clearNominatedNode}, podInfo, framework.AsStatus(err)
 		}
 
-		// SchedulePod() may have failed because the pod would not fit on any host, so we try to
-		// preempt, with the expectation that the next time the pod is tried for scheduling it
-		// will fit due to the preemption. It is also possible that a different pod will schedule
-		// into the resources that were preempted, but this is harmless.
-
+		// SchedulePod()若因 pod 无法在任何主机上调度而失败，我们会尝试抢占调度，期望下次重新调度时可以成功。
+		//  有时会有其他 pod 被调度到抢占资源上，但问题不大。
 		if !fwk.HasPostFilterPlugins() {
 			logger.V(3).Info("No PostFilter plugins are registered, so no preemption will be performed")
 			return ScheduleResult{}, podInfo, framework.NewStatus(framework.Unschedulable).WithError(err)
 		}
 
 		// Run PostFilter plugins to attempt to make the pod schedulable in a future scheduling cycle.
+		// PostFilter 插件通常用于实现抢占,但也可以做其他事情。 K8s 默认的抢占算法由 DefaultPreemption PostFilter 实现。
 		result, status := fwk.RunPostFilterPlugins(ctx, state, pod, fitError.Diagnosis.NodeToStatusMap)
 		msg := status.Message()
 		fitError.Diagnosis.PostFilterMsg = msg
@@ -371,8 +378,7 @@ func (sched *Scheduler) skipPodSchedule(ctx context.Context, fwk framework.Frame
 	}
 
 	// Case 2: pod that has been assumed could be skipped.
-	// An assumed pod can be added again to the scheduling queue if it got an update event
-	// during its previous scheduling cycle but before getting assumed.
+	// 如果假定的 pod 在上一个调度周期中发生了更新事件，但在被假定之前，它可以再次被添加到调度队列中。
 	isAssumed, err := sched.Cache.IsAssumedPod(pod)
 	if err != nil {
 		// TODO(91633): pass ctx into a revised HandleError
@@ -397,6 +403,8 @@ func (sched *Scheduler) schedulePod(ctx context.Context, fwk framework.Framework
 		return result, ErrNoNodesAvailable
 	}
 
+	// 过滤Node阶段: 每个Filter插件确定Pod是否可在节点调度。Pod仅可调度到“可行”节点，需通过所有Filter插件的检验。
+	// 每个Filter插件通过函数输入数据来决定节点接受或拒绝。
 	feasibleNodes, diagnosis, err := sched.findNodesThatFitPod(ctx, fwk, state, pod)
 	if err != nil {
 		return result, err
@@ -420,11 +428,16 @@ func (sched *Scheduler) schedulePod(ctx context.Context, fwk framework.Framework
 		}, nil
 	}
 
+	// prioritizeNodes 通过运行评分插件来确定节点的优先级、调用 RunScorePlugins() 会返回每个节点的得分。
+	// 每个插件的得分相加得出该节点的得分，然后运行任何扩展程序。
+	// 最后将所有分数合并（相加），得出所有节点的总加权分数。
 	priorityList, err := prioritizeNodes(ctx, sched.Extenders, fwk, state, pod, feasibleNodes)
 	if err != nil {
 		return result, err
 	}
 
+	// selectHost 获取按优先级排序的节点列表，以水库抽样的方式从得分最高的节点中选择一个
+	// 返回得分最高的节点,列表顶部的节点就是被选中的Node
 	host, _, err := selectHost(priorityList, numberOfHighestScoredNodesToReport)
 	trace.Step("Prioritizing done")
 
@@ -453,8 +466,7 @@ func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, fwk framework.F
 		if !s.IsRejected() {
 			return nil, diagnosis, s.AsError()
 		}
-		// All nodes in NodeToStatusMap will have the same status so that they can be handled in the preemption.
-		// Some non trivial refactoring is needed to avoid this copy.
+		// NodeToStatusMap中所有节点状态相同，以便于抢占处理。为避免此复制，需要进行一些重构。
 		for _, n := range allNodes {
 			diagnosis.NodeToStatusMap[n.Node().Name] = s
 		}

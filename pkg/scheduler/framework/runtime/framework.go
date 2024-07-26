@@ -693,6 +693,10 @@ func (f *frameworkImpl) RunPreFilterPlugins(ctx context.Context, state *framewor
 	return result, nil
 }
 
+// PreFilter 插件用于初始化插件所需的自定义状态,并将其保存到 CycleState 中。
+// Filter 插件会读取并使用这些自定义状态,来做出调度决策。在抢占过程中,这些自定义状态也可能发生变化。
+// 如果 Filter 插件使用任何依赖 pod 信息的自定义状态, 则需要实现 AddPod 和 RemovePod PreFilter 回调。
+// 这可确保抢占操作遵守 Filter 插件的约束,不会违反这些约束。
 func (f *frameworkImpl) runPreFilterPlugin(ctx context.Context, pl framework.PreFilterPlugin, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
 	if !state.ShouldRecordPluginMetrics() {
 		return pl.PreFilter(ctx, state, pod)

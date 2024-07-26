@@ -61,31 +61,30 @@ var ErrNoNodesAvailable = fmt.Errorf("no nodes available to schedule pods")
 
 // Scheduler watches for new unscheduled pods. It attempts to find
 // nodes that they fit on and writes bindings back to the api server.
+// 调度器监控未被调度的 Pod,并尝试为它们找到合适的节点,然后将调度结果写回 API 服务器。
 type Scheduler struct {
 	// It is expected that changes made via Cache will be observed
 	// by NodeLister and Algorithm.
+	// 调度缓存，存储所有节点的状态信息。调度算法会使用这个缓存,在每次调度前更新快照。
 	Cache internalcache.Cache
 
 	Extenders []framework.Extender
 
-	// NextPod should be a function that blocks until the next pod
-	// is available. We don't use a channel for this, because scheduling
-	// a pod may take some amount of time and we don't want pods to get
-	// stale while they sit in a channel.
+	// NextPod 是一个阻塞函数,会一直等待直到有下一个 pod 可用。我们不使用通道,是因为调度 pod 可能需要一定时间,
+	// 而且我们不希望 pod 在通道中等待时变质。
 	NextPod func(logger klog.Logger) (*framework.QueuedPodInfo, error)
 
 	// FailureHandler is called upon a scheduling failure.
 	FailureHandler FailureHandlerFn
 
-	// SchedulePod tries to schedule the given pod to one of the nodes in the node list.
-	// Return a struct of ScheduleResult with the name of suggested host on success,
-	// otherwise will return a FitError with reasons.
+	// SchedulePod尝试将pod调度到节点列表中的一个节点上。成功时返回带有建议主机名称的ScheduleResult结构，否则返回FitError并解释原因。
 	SchedulePod func(ctx context.Context, fwk framework.Framework, state *framework.CycleState, pod *v1.Pod) (ScheduleResult, error)
 
 	// Close this to shut down the scheduler.
 	StopEverything <-chan struct{}
 
 	// SchedulingQueue holds pods to be scheduled
+	// 调度队列，用来缓存等待调度的Pod
 	SchedulingQueue internalqueue.SchedulingQueue
 
 	// Profiles are the scheduling profiles.
@@ -235,6 +234,7 @@ func WithBuildFrameworkCapturer(fc FrameworkCapturer) Option {
 	}
 }
 
+// 创建了一个名为 "default-scheduler" 的默认调度器对应的 KubeSchedulerProfile，对应的插件和插件配置信息都为空。
 var defaultSchedulerOptions = schedulerOptions{
 	percentageOfNodesToScore:          schedulerapi.DefaultPercentageOfNodesToScore,
 	podInitialBackoffSeconds:          int64(internalqueue.DefaultPodInitialBackoffDuration.Seconds()),
@@ -292,6 +292,7 @@ func New(ctx context.Context,
 	snapshot := internalcache.NewEmptySnapshot()
 	metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, stopEverything)
 
+	// 调度框架Map对象: type Map map[string]framework.Framework
 	profiles, err := profile.NewMap(ctx, options.profiles, registry, recorderFactory,
 		frameworkruntime.WithComponentConfigVersion(options.componentConfigVersion),
 		frameworkruntime.WithClientSet(client),
@@ -405,12 +406,9 @@ func (sched *Scheduler) Run(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 	sched.SchedulingQueue.Run(logger)
 
-	// We need to start scheduleOne loop in a dedicated goroutine,
-	// because scheduleOne function hangs on getting the next item
-	// from the SchedulingQueue.
-	// If there are no new pods to schedule, it will be hanging there
-	// and if done in this goroutine it will be blocking closing
-	// SchedulingQueue, in effect causing a deadlock on shutdown.
+	// 我们需要在专用的 goroutine 中启动 scheduleOne 循环，因为 scheduleOne 函数会挂起，
+	// 无法从 SchedulingQueue 获取下一个项目。如果没有新的 pod 需要调度，它就会挂在那里，
+	// 如果在这个 goroutine 中完成，就会阻塞 SchedulingQueue 的关闭，从而在关闭时造成死锁。
 	go wait.UntilWithContext(ctx, sched.scheduleOne, 0)
 
 	<-ctx.Done()

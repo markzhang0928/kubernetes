@@ -47,6 +47,8 @@ import (
 const Name = names.DefaultPreemption
 
 // DefaultPreemption is a PostFilter plugin implements the preemption logic.
+// 默认抢占算法 试图找到同一节点上最佳的牺牲 pod 集合，这些 pod 需要被移除,以便更高优先级 pod 使用该节点
+// 尽量不违反 PDB,优先驱逐低优先级 pod,最小化 pod 流失
 type DefaultPreemption struct {
 	fh        framework.Handle
 	fts       feature.Features
@@ -95,7 +97,8 @@ func (pl *DefaultPreemption) PostFilter(ctx context.Context, state *framework.Cy
 		State:      state,
 		Interface:  pl,
 	}
-
+	// Preempt()会返回合适的Node的名字，参数'm'记录了每个Node被过滤掉的原因，
+	// 这样可以结合Node上已经运行Pod， 就可以找到在哪个Node上抢占哪些Pod。
 	result, status := pe.Preempt(ctx, pod, m)
 	msg := status.Message()
 	if len(msg) > 0 {
@@ -137,6 +140,7 @@ func (pl *DefaultPreemption) CandidatesToVictimsMap(candidates []preemption.Cand
 
 // SelectVictimsOnNode finds minimum set of pods on the given node that should be preempted in order to make enough room
 // for "pod" to be scheduled.
+// SelectVictimsOnNode 在给定节点上查找应抢占的最小 pod 集，以便为 "pod"调度留出足够空间。
 func (pl *DefaultPreemption) SelectVictimsOnNode(
 	ctx context.Context,
 	state *framework.CycleState,
@@ -165,6 +169,7 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 	}
 	// As the first step, remove all the lower priority pods from the node and
 	// check if the given pod can be scheduled.
+	// 所有比pod优先级低的pod都被当作潜在“受害者”pod
 	podPriority := corev1helpers.PodPriority(pod)
 	for _, pi := range nodeInfo.Pods {
 		if corev1helpers.PodPriority(pi.Pod) < podPriority {
@@ -181,12 +186,9 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 		return nil, 0, framework.NewStatus(framework.UnschedulableAndUnresolvable, message)
 	}
 
-	// If the new pod does not fit after removing all the lower priority pods,
-	// we are almost done and this node is not suitable for preemption. The only
-	// condition that we could check is if the "pod" is failing to schedule due to
-	// inter-pod affinity to one or more victims, but we have decided not to
-	// support this case for performance reasons. Having affinity to lower
-	// priority pods is not a recommended configuration anyway.
+	// 如果在移除所有低优先级 pod 后,新 pod 仍无法容纳,则该节点不适合抢占。
+	// 我们可以检查新 pod 是否因与受害 pod 的亲和性而无法调度,但出于性能考虑,我们决定不支持这种情况。
+	// 总之，亲和低优先级 pod 不是我们推荐的配置。
 	if status := pl.fh.RunFilterPluginsWithNominatedPods(ctx, state, pod, nodeInfo); !status.IsSuccess() {
 		return nil, 0, status
 	}
@@ -196,6 +198,7 @@ func (pl *DefaultPreemption) SelectVictimsOnNode(
 	// Try to reprieve as many pods as possible. We first try to reprieve the PDB
 	// violating victims and then other non-violating ones. In both cases, we start
 	// from the highest priority victims.
+	// 尝试恢复受PDB保护的Pod 和优先级更高的Pod。
 	violatingVictims, nonViolatingVictims := filterPodsWithPDBViolation(potentialVictims, pdbs)
 	reprievePod := func(pi *framework.PodInfo) (bool, error) {
 		if err := addPod(pi); err != nil {

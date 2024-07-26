@@ -168,6 +168,7 @@ func (ev *Evaluator) Preempt(ctx context.Context, pod *v1.Pod, m framework.NodeT
 	}
 
 	// 2) Find all preemption candidates.
+	// findCandidates 函数搜索可被合法驱逐的候选 pod,以使抢占 pod 能够被调度。
 	candidates, nodeToStatusMap, err := ev.findCandidates(ctx, pod, m)
 	if err != nil && len(candidates) == 0 {
 		return nil, framework.AsStatus(err)
@@ -194,12 +195,15 @@ func (ev *Evaluator) Preempt(ctx context.Context, pod *v1.Pod, m framework.NodeT
 	}
 
 	// 4) Find the best candidate.
+	// SelectCandidate 从 findCandidates 返回的列表中 挑选出最佳驱逐候选人。
+	// 优先驱逐那些 PDB 违规较少、优先级较低的 pod 等候选人
 	bestCandidate := ev.SelectCandidate(ctx, candidates)
 	if bestCandidate == nil || len(bestCandidate.Name()) == 0 {
 		return nil, framework.NewStatus(framework.Unschedulable, "no candidate node for preemption")
 	}
 
 	// 5) Perform preparation work before nominating the selected candidate.
+	// 执行实际的抢占
 	if status := ev.prepareCandidate(ctx, bestCandidate, pod, ev.PluginName); !status.IsSuccess() {
 		return nil, status
 	}
@@ -242,6 +246,8 @@ func (ev *Evaluator) findCandidates(ctx context.Context, pod *v1.Pod, m framewor
 		}
 		loggerV.Info("Selected candidates from a pool of nodes", "potentialNodesCount", len(potentialNodes), "offset", offset, "sampleLength", len(sample), "sample", sample, "candidates", numCandidates)
 	}
+	// DryRunPreemption 会在可能的节点上模拟抢占逻辑,返回候选节点和过滤节点的状态映射。
+	// 候选节点的数量取决于插件参数中定义的约束条件。在候选节点列表中,不违反 PDB 的节点优先于违反 PDB 的节点。
 	candidates, nodeStatuses, err := ev.DryRunPreemption(ctx, pod, potentialNodes, pdbs, offset, numCandidates)
 	for node, nodeStatus := range unschedulableNodeStatus {
 		nodeStatuses[node] = nodeStatus
@@ -401,6 +407,7 @@ func (ev *Evaluator) prepareCandidate(ctx context.Context, c Candidate, pod *v1.
 	// this node. So, we should remove their nomination. Removing their
 	// nomination updates these pods and moves them to the active queue. It
 	// lets scheduler find another place for them.
+	// 如有必要删除受害者pod的提名
 	nominatedPods := getLowerPriorityNominatedPods(logger, fh, pod, c.Name())
 	if err := util.ClearNominatedNodeName(ctx, cs, nominatedPods...); err != nil {
 		logger.Error(err, "Cannot clear 'NominatedNodeName' field")
@@ -581,6 +588,8 @@ func (ev *Evaluator) DryRunPreemption(ctx context.Context, pod *v1.Pod, potentia
 	checkNode := func(i int) {
 		nodeInfoCopy := potentialNodes[(int(offset)+i)%len(potentialNodes)].Snapshot()
 		stateCopy := ev.State.Clone()
+		// nodeInfo和 cycleState是深拷贝
+		// 通过在集群中的每个节点上并行运行SelectVictimsOnNode, 如果指定节点存在驱逐候选节点，则返回该节点
 		pods, numPDBViolations, status := ev.SelectVictimsOnNode(ctx, stateCopy, pod, nodeInfoCopy, pdbs)
 		if status.IsSuccess() && len(pods) != 0 {
 			victims := extenderv1.Victims{
