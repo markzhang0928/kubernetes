@@ -508,6 +508,10 @@ func NewControllerDescriptors() map[string]*ControllerDescriptor {
 	// The only known special case is the ServiceAccountTokenController which *must* be started
 	// first to ensure that the SA tokens for future controllers will exist. Think very carefully before adding new
 	// special controllers.
+	//1. 首先添加一些特殊的控制器,这些控制器无法在主控制循环中初始化。
+	//2. 这些控制器需要在元数据和重复检测中单独处理。
+	//3. 只有 ServiceAccountTokenController 是已知的特殊情况,必须先启动它,以确保后续控制器可以使用 SA 令牌。
+	//4. 在添加新的特殊控制器时,需要非常谨慎考虑。
 	register(newServiceAccountTokenControllerDescriptor(nil))
 
 	register(newEndpointsControllerDescriptor())
